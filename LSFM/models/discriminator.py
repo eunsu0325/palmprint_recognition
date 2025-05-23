@@ -1,7 +1,7 @@
 import math
 import torch
 import torch.nn as nn
-from core.model_blocks import ResBlk  # StarGAN v2 ResBlk
+from core.model import ResBlk
 
 class Discriminator(nn.Module):
     """

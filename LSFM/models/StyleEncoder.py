@@ -1,7 +1,7 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from core.model_blocks import ResBlk  # → StarGAN v2의 ResBlk 구현을 가져오세요
+from core.model import ResBlk
 
 class StyleEncoder(nn.Module):
     """

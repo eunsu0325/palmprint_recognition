@@ -88,8 +88,8 @@ def evaluate(args):
                        num_classes=args.num_classes).to(device)
 
     # 체크포인트 로드
-    fe_path = os.path.join(args.checkpoint_dir, f'FE_a{args.epoch}.pth')
-    cl_path = os.path.join(args.checkpoint_dir, f'C_a{args.epoch}.pth')
+    fe_path = os.path.join(args.checkpoint_dir, f'FE_s{args.epoch}.pth')
+    cl_path = os.path.join(args.checkpoint_dir, f'C_s{args.epoch}.pth')
     F_ext.load_state_dict(torch.load(fe_path))
     clf.load_state_dict(torch.load(cl_path))
     F_ext.eval(); clf.eval()

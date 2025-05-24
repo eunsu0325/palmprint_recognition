@@ -16,6 +16,7 @@ from lsfm.models.classifier        import Classifier
 from lsfm.models.mmd               import MKMMDLoss
 from lsfm.datasets                 import StyleDataset, AdaptDataset
 
+
 def parse_args():
     parser = argparse.ArgumentParser(description="LSFM Training Script")
     parser.add_argument('--dataset',      type=str,   default='structured',
@@ -69,12 +70,14 @@ def parse_args():
     args.output_dir = args.save_dir
     return args
 
+
 def default_transforms(img_size):
     return T.Compose([
         T.Resize((img_size, img_size)),
         T.ToTensor(),
         T.Normalize((0.5,), (0.5,))
     ])
+
 
 def train_style(models, optimizers, dataloaders, device, args):
     G, M, SE, D = models['G'], models['M'], models['SE'], models['D']
@@ -140,6 +143,7 @@ def train_style(models, optimizers, dataloaders, device, args):
         torch.save(clf.state_dict(),    os.path.join(args.output_dir, f'clf_style_epoch{epoch}.pth'))
         print(f"[Style] Epoch {epoch} | D: {loss_D:.4f} | G: {loss_G:.4f} | C: {loss_cls:.4f}")
 
+
 def train_adapt(models, optimizers, dataloaders, device, args):
     G           = models['G']
     M           = models['M']
@@ -168,6 +172,7 @@ def train_adapt(models, optimizers, dataloaders, device, args):
         torch.save(clf.state_dict(),   os.path.join(args.output_dir, f'clf_adapt_epoch{epoch}.pth'))
         print(f"[Adapt] Epoch {epoch} | MMD: {loss_mmd:.4f}")
 
+
 def main():
     args   = parse_args()
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -175,19 +180,16 @@ def main():
     transforms = default_transforms(args.img_size)
     loaders = {
         'style': DataLoader(
-            StyleDataset(args.data_root, args.domain_list,
-                         train_txt=args.train_txt,
-                         val_txt=None,
-                         transform=transforms),
+            StyleDataset(args.data_root, args.domain_list, transform=transforms),
             batch_size=args.batch_size, shuffle=True, drop_last=True
         ),
         'adapt': DataLoader(
-            AdaptDataset(args.data_root,
-                         source_domains=args.domain_list[:-1],
-                         target_domains=[args.domain_list[-1]],
-                         train_txt=args.train_txt,
-                         val_txt=args.val_txt,
-                         transform=transforms),
+            AdaptDataset(
+                args.data_root,
+                source_domains=args.domain_list[:-1],
+                target_domains=[args.domain_list[-1]],
+                transform=transforms
+            ),
             batch_size=args.batch_size, shuffle=True, drop_last=True
         )
     }
@@ -197,7 +199,7 @@ def main():
         'M':     MappingNetwork(latent_dim=args.z_dim, style_dim=args.style_dim,
                                num_domains=args.num_domains).to(device),
         'SE':    StyleEncoder(img_size=args.img_size, in_channels=1,
-                              style_dim=args.style_dim, num_domains=args.num_domains).to(device),
+                             (style_dim=args.style_dim, num_domains=args.num_domains).to(device),
         'D':     Discriminator(in_channels=1, num_domains=args.num_domains).to(device),
         'F_ext': FeatureExtractor(in_channels=1).to(device),
         'clf':   Classifier(in_dim=FeatureExtractor(in_channels=1).out_dim,

@@ -66,28 +66,28 @@ def default_transforms(img_size):
         T.Normalize((0.5,), (0.5,))
     ])
 
+# train.py 의 make_dataloaders() 부분
 def make_dataloaders(args):
     tf = default_transforms(args.img_size)
 
-    # StyleDataset 시그니처: (data_root, domain_list, train_txt, val_txt, transform)
+    # StyleDataset: (data_root, domain_list, train_txt, transform)
     style_set = StyleDataset(
         args.data_root,
         args.domain_list,
         args.train_txt,
-        args.val_txt,
-        tf
+        transform=tf
     )
     style_loader = DataLoader(style_set,
                               batch_size=args.batch_size,
                               shuffle=True,
                               drop_last=True)
 
-    # AdaptDataset 시그니처: (data_root, source_domains, target_domains, transform)
+    # AdaptDataset: unchanged
     adapt_set = AdaptDataset(
         args.data_root,
         args.domain_list[:-1],
         [args.domain_list[-1]],
-        tf
+        transform=tf
     )
     adapt_loader = DataLoader(adapt_set,
                               batch_size=args.batch_size,
@@ -95,6 +95,7 @@ def make_dataloaders(args):
                               drop_last=True)
 
     return {'style': style_loader, 'adapt': adapt_loader}
+
 
 def train_style(models, utils, dl, device, args):
     G, M, SE, D = models['G'], models['M'], models['SE'], models['D']

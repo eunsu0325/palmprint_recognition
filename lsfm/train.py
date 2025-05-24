@@ -66,33 +66,36 @@ def default_transforms(img_size):
         T.Normalize((0.5,), (0.5,))
     ])
 
-# train.py 의 make_dataloaders() 부분
 def make_dataloaders(args):
     tf = default_transforms(args.img_size)
 
-    # StyleDataset: (data_root, domain_list, train_txt, transform)
+    # -- 스타일 매칭용 데이터로더 --
     style_set = StyleDataset(
         args.data_root,
         args.domain_list,
         args.train_txt,
         transform=tf
     )
-    style_loader = DataLoader(style_set,
-                              batch_size=args.batch_size,
-                              shuffle=True,
-                              drop_last=True)
+    style_loader = DataLoader(
+        style_set,
+        batch_size=args.batch_size,
+        shuffle=True,
+        drop_last=True
+    )
 
-    # AdaptDataset: unchanged
+    # -- 적응(특성매칭)용 데이터로더 --
     adapt_set = AdaptDataset(
         args.data_root,
         args.domain_list[:-1],
         [args.domain_list[-1]],
         transform=tf
     )
-    adapt_loader = DataLoader(adapt_set,
-                              batch_size=args.batch_size,
-                              shuffle=True,
-                              drop_last=True)
+    adapt_loader = DataLoader(
+        adapt_set,
+        batch_size=args.batch_size,
+        shuffle=True,
+        drop_last=True
+    )
 
     return {'style': style_loader, 'adapt': adapt_loader}
 
@@ -106,8 +109,8 @@ def train_style(models, utils, dl, device, args):
     )
 
     gan_loss = nn.MSELoss()
-    cyc_loss = nn.L1Loss()
     sty_loss = nn.L1Loss()
+    cyc_loss = nn.L1Loss()
     ce_loss  = nn.CrossEntropyLoss()
 
     for epoch in range(args.num_epochs_style):

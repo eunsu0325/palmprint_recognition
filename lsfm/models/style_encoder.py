@@ -1,21 +1,48 @@
-# ──────────────────────────────────────────────────────────────
-#  lsfm/models/style_encoder.py  (전체 코드 교체본)
-# ──────────────────────────────────────────────────────────────
+# ─────────────────────────────────────────────────────────────
+#  lsfm/models/style_encoder.py   (논문 LSFM/StarGAN-v2 호환)
+# ─────────────────────────────────────────────────────────────
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from core.model import ResBlk          # StarGAN v2와 동일한 잔차 블록
+
+# 프로젝트에서 이미 쓰고 있는 ResBlk 가져오기
+try:
+    from core.model import ResBlk          # 기존 구현
+except ModuleNotFoundError:
+    # 최소 대체 구현 (stride=2 downsample 시 사용)
+    class ResBlk(nn.Module):
+        def __init__(self, dim_in, dim_out, downsample=False):
+            super().__init__()
+            self.down = downsample
+            self.learned_sc = (dim_in != dim_out)
+            self.conv1 = nn.Conv2d(dim_in,  dim_out, 3, 1, 1)
+            self.conv2 = nn.Conv2d(dim_out, dim_out, 3, 1, 1)
+            self.act   = nn.LeakyReLU(0.2, inplace=True)
+            if downsample:
+                self.avgpool = nn.AvgPool2d(2)
+            if self.learned_sc:
+                self.conv_sc = nn.Conv2d(dim_in, dim_out, 1, 1, 0)
+
+        def shortcut(self, x):
+            h = x
+            if self.down:    h = self.avgpool(h)
+            if self.learned_sc: h = self.conv_sc(h)
+            return h
+
+        def residual(self, x):
+            h = self.conv1(x)
+            h = self.act(h)
+            h = self.conv2(h)
+            if self.down: h = self.avgpool(h)
+            return h
+
+        def forward(self, x):
+            return self.residual(x) + self.shortcut(x)
+
 
 class StyleEncoder(nn.Module):
     """
-    StarGAN v2-형 LightStarGAN Style Encoder
-
-    Args:
-        img_size     (int): 입력 해상도. 128·256 등 2의 거듭제곱.
-        style_dim    (int): 스타일 벡터 차원.
-        num_domains  (int): 도메인(뷰) 개수.
-        max_conv_dim (int): conv 채널 상한선.
-        in_channels  (int): 입력 영상 채널 수. (기본 1: palmprint gray)
+    LSFM / StarGAN v2 스타일 인코더
     """
     def __init__(
         self,
@@ -27,65 +54,53 @@ class StyleEncoder(nn.Module):
     ):
         super().__init__()
 
-        # StarGAN v2 관습: 첫 conv 채널 = 2^14 / img_size
-        dim_in = 2 ** 14 // img_size
-        blocks = []
+        # 1. 첫 conv 채널 수 (StarGAN v2 룰)
+        dim_in = 2 ** 14 // img_size      # 128→64, 256→32 …
+        layers = [nn.Conv2d(in_channels, dim_in, 3, 1, 1)]
 
-        # 1) from-rgb
-        blocks.append(nn.Conv2d(in_channels, dim_in, 3, 1, 1))
-
-        # 2) 다운샘플 residual 블록
+        # 2. 다운샘플 잔차블록 N 회 (log2(img)-2)
         repeat_num = int(torch.log2(torch.tensor(img_size)).item()) - 2
         for _ in range(repeat_num):
             dim_out = min(dim_in * 2, max_conv_dim)
-            blocks.append(ResBlk(dim_in, dim_out, downsample=True))
-            dim_in = dim_out
+            layers.append(ResBlk(dim_in, dim_out, downsample=True))
+            dim_in = dim_out                            # 다음 입력 채널
 
-        # 3) 마지막 4×4 → 1×1 map
-        blocks += [
-            nn.LeakyReLU(0.2),
-            nn.Conv2d(dim_out, dim_out, 4, 1, 0),
-            nn.LeakyReLU(0.2)
+        # 3. 4×4 → 1×1
+        layers += [
+            nn.LeakyReLU(0.2, inplace=True),
+            nn.Conv2d(dim_in, dim_in, 4, 1, 0),         # dim_in 사용!
+            nn.LeakyReLU(0.2, inplace=True)
         ]
-        self.shared = nn.Sequential(*blocks)
+        self.shared = nn.Sequential(*layers)
 
-        # 4) 도메인-별 fully-connected (unshared)
-        self.unshared = nn.ModuleList([
-            nn.Linear(dim_out, style_dim) for _ in range(num_domains)
-        ])
+        # 4. 도메인별 완전 연결
+        self.unshared = nn.ModuleList(
+            [nn.Linear(dim_in, style_dim) for _ in range(num_domains)]
+        )
         self.style_dim   = style_dim
         self.num_domains = num_domains
 
-    # ----------------------------------------------------------
-    # Forward
-    # ----------------------------------------------------------
+    # ------------------------------------------------------
     def forward(self, x: torch.Tensor, y: torch.LongTensor):
         """
-        x : [B, C, H, W]  - palmprint image
-        y : [B]           - domain label (0 ~ num_domains-1)
-        return : [B, style_dim]
+        x : (B, C, H, W)  gray palm image
+        y : (B,)          domain index tensor (int64 권장)
         """
-        h = self.shared(x)           # [B, dim_out, 1, 1]
-        h = h.view(h.size(0), -1)    # [B, dim_out]
+        if x.dim() != 4:
+            raise ValueError("input must be 4-D (B,C,H,W)")
+        y = y.to(torch.long)
 
-        # 모든 도메인 fc 통과 후 스택 → [B, D, style_dim]
-        s_all = torch.stack([fc(h) for fc in self.unshared], dim=1)
-
-        # y에 해당하는 style-code 선택
+        h = self.shared(x)            # (B, C, 1, 1)
+        h = h.view(h.size(0), -1)     # (B, C)
+        style_all = torch.stack([fc(h) for fc in self.unshared], dim=1)
         idx = torch.arange(x.size(0), device=x.device)
-        s   = s_all[idx, y]          # [B, style_dim]
-        return s
+        return style_all[idx, y]      # (B, style_dim)
 
 
-# ──────────────────────────────────────────────────────────────
-#  간단 self-test
-# ──────────────────────────────────────────────────────────────
+# --------------------------- quick self-test ---------------------------
 if __name__ == "__main__":
-    enc = StyleEncoder(img_size=128,
-                       style_dim=64,
-                       num_domains=4,
-                       in_channels=1)
-    x = torch.randn(4, 1, 128, 128)
+    enc = StyleEncoder(img_size=128, style_dim=64, num_domains=4, in_channels=1)
+    x   = torch.randn(4, 1, 128, 128)
     dom = torch.tensor([0, 2, 1, 3])
-    s = enc(x, dom)
-    print("style code shape:", s.shape)   # → torch.Size([4, 64])
+    s   = enc(x, dom)
+    print("style code shape :", s.shape)   # torch.Size([4, 64])

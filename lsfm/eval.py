@@ -1,5 +1,4 @@
 import os
-import sys
 import argparse
 import torch
 from torch.utils.data import DataLoader, Dataset
@@ -20,14 +19,15 @@ def parse_args():
     parser.add_argument('--data_root',      type=str,   required=True,
                         help='Dataset root directory')
     parser.add_argument('--checkpoint_dir', type=str,   required=True,
-                        help='Directory with saved F_ext_best.pth and clf_best.pth')
+                        help='Directory with saved checkpoints')
+    parser.add_argument('--epoch',          type=int,   required=True,
+                        help='Epoch number to load (e.g. 9)')
     parser.add_argument('--batch_size',     type=int,   default=32)
     parser.add_argument('--num_classes',    type=int,   required=True,
                         help='Number of identity classes')
     parser.add_argument('--target_domains', nargs='+', required=True,
                         help='List of target domain folder names')
-    args = parser.parse_args()
-    return args
+    return parser.parse_args()
 
 
 def default_transforms(img_size):
@@ -87,11 +87,14 @@ def evaluate(args):
                        hidden_dims=[512],
                        num_classes=args.num_classes).to(device)
 
-    F_ext.load_state_dict(torch.load(os.path.join(args.checkpoint_dir, 'F_ext_best.pth')))
-    clf.load_state_dict(torch.load(os.path.join(args.checkpoint_dir, 'clf_best.pth')))
+    # 체크포인트 로드
+    fe_path  = os.path.join(args.checkpoint_dir, f'F_ext_adapt_epoch{args.epoch}.pth')
+    cl_path  = os.path.join(args.checkpoint_dir, f'clf_adapt_epoch{args.epoch}.pth')
+    F_ext.load_state_dict(torch.load(fe_path))
+    clf.load_state_dict(torch.load(cl_path))
     F_ext.eval(); clf.eval()
 
-    # Prepare DataLoader
+    # DataLoader 준비
     transforms = default_transforms(args.img_size)
     test_ds = TestDataset(args.data_root, args.target_domains, transform=transforms)
     loader  = DataLoader(test_ds, batch_size=args.batch_size, shuffle=False)
@@ -101,7 +104,7 @@ def evaluate(args):
         for imgs, labels in loader:
             imgs   = imgs.to(device)
             labels = labels.to(device)
-            feats = F_ext(imgs)
+            feats  = F_ext(imgs)
             _, logits = clf(feats)
             probs = torch.softmax(logits, dim=1)
             preds = torch.argmax(probs, dim=1)

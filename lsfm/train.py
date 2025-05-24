@@ -34,8 +34,7 @@ def parse_args():
     parser.add_argument('--num_epochs_style', type=int, default=50)
     parser.add_argument('--num_epochs_adapt', type=int, default=100)
     parser.add_argument('--lambda_mmd', type=float, default=0.1)
-    args, _ = parser.parse_known_args()
-    return args
+    return parser.parse_args()
 
 
 def default_transforms(img_size):
@@ -54,7 +53,6 @@ def train_style(models, optimizers, dataloaders, device, args):
         optimizers['opt_D'], optimizers['opt_F'], optimizers['opt_clf']
     )
 
-    # 손실 정의: Least-Squares GAN (LSGAN)
     criterion_gan = nn.MSELoss()
     criterion_cyc = nn.L1Loss()
     criterion_sty = nn.L1Loss()
@@ -94,7 +92,7 @@ def train_style(models, optimizers, dataloaders, device, args):
             loss_G.backward()
             opt_G.step(); opt_M.step(); opt_SE.step()
 
-            # 4) 분류기 파인튜닝 (Eq.8)
+            # 4) 분류기 파인튜닝
             feat_fake = F_ext(fake_t.detach())
             _, logits_fake = clf(feat_fake)
             loss_cls = criterion_ce(logits_fake, src_id)
@@ -102,7 +100,6 @@ def train_style(models, optimizers, dataloaders, device, args):
             loss_cls.backward()
             opt_F.step(); opt_clf.step()
 
-        # 체크포인트 저장
         os.makedirs(args.output_dir, exist_ok=True)
         torch.save(G.state_dict(),  os.path.join(args.output_dir, f'G_epoch{epoch}.pth'))
         torch.save(M.state_dict(),  os.path.join(args.output_dir, f'M_epoch{epoch}.pth'))
@@ -168,7 +165,8 @@ def main():
     }
 
     models = {
-        'G': Generator(img_size=args.img_size, style_dim=args.style_dim).to(device),
+-        'G': Generator(img_size=args.img_size, style_dim=args.style_dim).to(device),
++        'G': Generator(style_dim=args.style_dim).to(device),
         'M': MappingNetwork(latent_dim=args.z_dim, style_dim=args.style_dim, num_domains=args.num_domains).to(device),
         'SE': StyleEncoder(img_size=args.img_size, in_channels=1, style_dim=args.style_dim, num_domains=args.num_domains).to(device),
         'D': Discriminator(in_channels=1, num_domains=args.num_domains).to(device),

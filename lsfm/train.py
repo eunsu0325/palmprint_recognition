@@ -33,10 +33,10 @@ def parse_args():
     parser.add_argument('--lr',           type=float, default=1e-4)
     parser.add_argument('--style_dim',    type=int,   default=64)
     parser.add_argument('--z_dim',        type=int,   default=16)
-    parser.add_argument('--num_domains',  type=int,   required=True,
-                        help='Number of domains')
-    parser.add_argument('--num_classes',  type=int,   required=True,
-                        help='Number of classes')
+    parser.add_argument('--num_domains',  type=int,   default=None,
+                        help='Number of domains (inferred if not provided)')
+    parser.add_argument('--num_classes',  type=int,   default=None,
+                        help='Number of classes (inferred if not provided)')
     parser.add_argument('--mmd_layers',   type=str,   default='2,4,6',
                         help='Comma-separated MMD layer indices')
     parser.add_argument('--lambda_mmd',   type=float, default=0.1)
@@ -45,6 +45,18 @@ def parse_args():
     parser.add_argument('--img_size',     type=int,   default=128,
                         help='Input image size')
     args = parser.parse_args()
+    # infer num_domains and num_classes if not given
+    if args.num_domains is None:
+        args.num_domains = len(args.domain_list)
+    if args.num_classes is None:
+        # count unique labels in train split
+        labels = set()
+        with open(args.train_txt) as f:
+            for line in f:
+                parts = line.strip().split()
+                if len(parts)>=2:
+                    labels.add(int(parts[1]))
+        args.num_classes = len(labels)
     # map epochs
     args.num_epochs_style = args.epochs
     args.num_epochs_adapt = args.epochs

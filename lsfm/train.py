@@ -64,8 +64,8 @@ def train_style(models, optimizers, dataloaders, device, args):
             src_id, ds, dt = src_id.to(device), ds.to(device), dt.to(device)
 
             # 1) 스타일 전송
-            z     = torch.randn(real_s.size(0), args.z_dim, device=device)
-            sc_t  = M(z, dt)
+            z      = torch.randn(real_s.size(0), args.z_dim, device=device)
+            sc_t   = M(z, dt)
             fake_t = G(real_s, sc_t)
 
             # 2) D 업데이트 (LSGAN)
@@ -101,12 +101,12 @@ def train_style(models, optimizers, dataloaders, device, args):
             opt_F.step(); opt_clf.step()
 
         os.makedirs(args.output_dir, exist_ok=True)
-        torch.save(G.state_dict(),  os.path.join(args.output_dir, f'G_epoch{epoch}.pth'))
-        torch.save(M.state_dict(),  os.path.join(args.output_dir, f'M_epoch{epoch}.pth'))
-        torch.save(SE.state_dict(), os.path.join(args.output_dir, f'SE_epoch{epoch}.pth'))
-        torch.save(D.state_dict(),  os.path.join(args.output_dir, f'D_epoch{epoch}.pth'))
-        torch.save(F_ext.state_dict(), os.path.join(args.output_dir, f'F_ext_epoch{epoch}.pth'))
-        torch.save(clf.state_dict(),   os.path.join(args.output_dir, f'clf_epoch{epoch}.pth'))
+        torch.save(G.state_dict(),        os.path.join(args.output_dir, f'G_epoch{epoch}.pth'))
+        torch.save(M.state_dict(),        os.path.join(args.output_dir, f'M_epoch{epoch}.pth'))
+        torch.save(SE.state_dict(),       os.path.join(args.output_dir, f'SE_epoch{epoch}.pth'))
+        torch.save(D.state_dict(),        os.path.join(args.output_dir, f'D_epoch{epoch}.pth'))
+        torch.save(F_ext.state_dict(),    os.path.join(args.output_dir, f'F_ext_epoch{epoch}.pth'))
+        torch.save(clf.state_dict(),      os.path.join(args.output_dir, f'clf_epoch{epoch}.pth'))
         print(f"[Style] Epoch {epoch:02d} | loss_D: {loss_D:.4f} | loss_G: {loss_G:.4f} | loss_cls: {loss_cls:.4f}")
 
 
@@ -139,8 +139,8 @@ def train_adapt(models, optimizers, dataloaders, device, args):
             loss_mmd.backward()
             opt_F.step(); opt_clf.step()
 
-        torch.save(F_ext.state_dict(), os.path.join(args.output_dir, f'F_ext_adapt_epoch{epoch}.pth'))
-        torch.save(clf.state_dict(),   os.path.join(args.output_dir, f'clf_adapt_epoch{epoch}.pth'))
+        torch.save(F_ext.state_dict(),   os.path.join(args.output_dir, f'F_ext_adapt_epoch{epoch}.pth'))
+        torch.save(clf.state_dict(),     os.path.join(args.output_dir, f'clf_adapt_epoch{epoch}.pth'))
         print(f"[Adapt] Epoch {epoch:02d} | MMD: {loss_mmd:.4f}")
 
 
@@ -165,8 +165,7 @@ def main():
     }
 
     models = {
--        'G': Generator(img_size=args.img_size, style_dim=args.style_dim).to(device),
-+        'G': Generator(style_dim=args.style_dim).to(device),
+        'G': Generator(style_dim=args.style_dim).to(device),
         'M': MappingNetwork(latent_dim=args.z_dim, style_dim=args.style_dim, num_domains=args.num_domains).to(device),
         'SE': StyleEncoder(img_size=args.img_size, in_channels=1, style_dim=args.style_dim, num_domains=args.num_domains).to(device),
         'D': Discriminator(in_channels=1, num_domains=args.num_domains).to(device),

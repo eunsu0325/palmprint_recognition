@@ -1,77 +1,55 @@
-import os
-import sys
-import argparse
-import torch
+# ───────────────────────────────────────────────────────────────
+#  lsfm/train.py  (LSFM 논문 구조에 맞춘 전체 교체본)
+# ───────────────────────────────────────────────────────────────
+import os, argparse, torch
 from torch import nn, optim
 from torch.utils.data import DataLoader
 import torchvision.transforms as T
 
-# --- 모델 임포트 ---
-from lsfm.models.generator         import Generator
-from lsfm.models.mapping_net       import MappingNetwork
-from lsfm.models.style_encoder     import StyleEncoder
-from lsfm.models.discriminator     import Discriminator
+from lsfm.models.generator     import Generator
+from lsfm.models.mapping_net   import MappingNetwork
+from lsfm.models.style_encoder import StyleEncoder
+from lsfm.models.discriminator import Discriminator
 from lsfm.models.feature_extractor import FeatureExtractor
-from lsfm.models.classifier        import Classifier
-from lsfm.models.mmd               import MKMMDLoss
-from lsfm.datasets                 import StyleDataset, AdaptDataset
+from lsfm.models.classifier    import Classifier
+from lsfm.models.mmd           import MKMMDLoss
+from lsfm.datasets             import StyleDataset, AdaptDataset
 
-
+# -----------------------------------------------------------------
 def parse_args():
-    parser = argparse.ArgumentParser(description="LSFM Training Script")
-    parser.add_argument('--dataset',      type=str,   default='structured',
-                        help='Dataset type')
-    parser.add_argument('--data_root',    type=str,   required=True,
-                        help='Root directory of structured dataset')
-    parser.add_argument('--domain_list',  nargs='+',  required=True,
-                        help='List of domain names')
-    parser.add_argument('--train_txt',    type=str,   required=True,
-                        help='Path to train split file')
-    parser.add_argument('--val_txt',      type=str,   required=True,
-                        help='Path to validation split file')
-    parser.add_argument('--epochs',       type=int,   default=50,
-                        help='Number of epochs for both style and adapt stages')
-    parser.add_argument('--batch_size',   type=int,   default=32)
-    parser.add_argument('--lr',           type=float, default=1e-4)
-    parser.add_argument('--style_dim',    type=int,   default=64)
-    parser.add_argument('--z_dim',        type=int,   default=16)
-    parser.add_argument('--num_domains',  type=int,   default=None,
-                        help='Number of domains (inferred if not provided)')
-    parser.add_argument('--num_classes',  type=int,   default=None,
-                        help='Number of classes (inferred if not provided)')
-    parser.add_argument('--mmd_layers',   type=str,   default='2,4,6',
-                        help='Comma-separated MMD layer indices')
-    parser.add_argument('--lambda_mmd',   type=float, default=0.1)
-    parser.add_argument('--save_dir',     type=str,   default='./checkpoints',
-                        help='Checkpoint save directory')
-    parser.add_argument('--img_size',     type=int,   default=128,
-                        help='Input image size')
-    args = parser.parse_args()
+    p = argparse.ArgumentParser()
+    # data ---------------------------------------------------------
+    p.add_argument('--data_root',   required=True)
+    p.add_argument('--domain_list', nargs='+', required=True)
+    p.add_argument('--train_txt',   required=True)
+    p.add_argument('--val_txt',     required=True)
+    # hyper --------------------------------------------------------
+    p.add_argument('--epochs',      type=int, default=50)
+    p.add_argument('--batch_size',  type=int, default=32)
+    p.add_argument('--lr',          type=float, default=1e-4)
+    p.add_argument('--style_dim',   type=int,   default=64)
+    p.add_argument('--z_dim',       type=int,   default=16)
+    p.add_argument('--img_size',    type=int,   default=128)
+    p.add_argument('--mmd_layers',  default='2,4,6')
+    p.add_argument('--lambda_mmd',  type=float, default=0.1)
+    p.add_argument('--save_dir',    default='./checkpoints')
+    # optional -----------------------------------------------------
+    p.add_argument('--num_domains', type=int)
+    p.add_argument('--num_classes', type=int)
+    args = p.parse_args()
 
-    # map epochs
-    args.num_epochs_style = args.epochs
-    args.num_epochs_adapt = args.epochs
+    args.mmd_layers = [int(i) for i in args.mmd_layers.split(',') if i]
 
-    # parse mmd_layers
-    args.mmd_layers = [int(x) for x in args.mmd_layers.split(',') if x]
-
-    # infer num_domains and num_classes if not provided
     if args.num_domains is None:
         args.num_domains = len(args.domain_list)
     if args.num_classes is None:
-        labels = set()
         with open(args.train_txt) as f:
-            for line in f:
-                parts = line.strip().split()
-                if len(parts) >= 2:
-                    labels.add(int(parts[1]))
-        args.num_classes = len(labels)
-
-    args.output_dir = args.save_dir
+            args.num_classes = len({int(l.split()[1]) for l in f})
     return args
 
 
-def default_transforms(img_size):
+# -----------------------------------------------------------------
+def tfms(img_size):
     return T.Compose([
         T.Resize((img_size, img_size)),
         T.ToTensor(),
@@ -79,144 +57,150 @@ def default_transforms(img_size):
     ])
 
 
-def train_style(models, optimizers, dataloaders, device, args):
-    G, M, SE, D = models['G'], models['M'], models['SE'], models['D']
-    F_ext, clf = models['F_ext'], models['clf']
-    opt_G, opt_M, opt_SE, opt_D, opt_F, opt_clf = (
-        optimizers['opt_G'], optimizers['opt_M'], optimizers['opt_SE'],
-        optimizers['opt_D'], optimizers['opt_F'], optimizers['opt_clf']
+# -----------------------------------------------------------------
+def make_dataloaders(args):
+    train_set = StyleDataset(args.data_root,
+                             args.domain_list,
+                             args.train_txt,
+                             transform=tfms(args.img_size))
+    val_set   = StyleDataset(args.data_root,
+                             args.domain_list,
+                             args.val_txt,
+                             transform=tfms(args.img_size))
+    style_loader = DataLoader(train_set,
+                              batch_size=args.batch_size,
+                              shuffle=True, drop_last=True)
+    adapt_loader = DataLoader(
+        AdaptDataset(args.data_root,
+                     source_domains=args.domain_list[:-1],
+                     target_domains=[args.domain_list[-1]],
+                     transform=tfms(args.img_size)),
+        batch_size=args.batch_size, shuffle=True, drop_last=True
     )
-
-    criterion_gan = nn.MSELoss()
-    criterion_cyc = nn.L1Loss()
-    criterion_sty = nn.L1Loss()
-    criterion_ce  = nn.CrossEntropyLoss()
-
-    for epoch in range(args.num_epochs_style):
-        for real_s, real_t, src_id, ds, dt in dataloaders['style']:
-            real_s, real_t = real_s.to(device), real_t.to(device)
-            src_id, ds, dt = src_id.to(device), ds.to(device), dt.to(device)
-
-            # 1) style transfer
-            z      = torch.randn(real_s.size(0), args.z_dim, device=device)
-            sc_t   = M(z, dt)
-            fake_t = G(real_s, sc_t)
-
-            # 2) update D
-            D_real = D(real_t, dt)
-            D_fake = D(fake_t.detach(), dt)
-            valid  = torch.ones_like(D_real)
-            fake   = torch.zeros_like(D_fake)
-            loss_D = 0.5 * (criterion_gan(D_real, valid) + criterion_gan(D_fake, fake))
-            opt_D.zero_grad()
-            loss_D.backward()
-            opt_D.step()
-
-            # 3) update G, M, SE
-            D_fake2    = D(fake_t, dt)
-            loss_G_gan = criterion_gan(D_fake2, valid)
-            sc_pred    = SE(fake_t, dt)
-            loss_sty   = criterion_sty(sc_pred, sc_t)
-            z2         = torch.randn_like(z)
-            sc_s       = M(z2, ds)
-            rec_s      = G(fake_t, sc_s)
-            loss_cyc   = criterion_cyc(rec_s, real_s)
-            loss_G     = loss_G_gan + loss_sty + loss_cyc
-            opt_G.zero_grad(); opt_M.zero_grad(); opt_SE.zero_grad()
-            loss_G.backward()
-            opt_G.step(); opt_M.step(); opt_SE.step()
-
-            # 4) fine-tune classifier
-            feat_fake = F_ext(fake_t.detach())
-            _, logits = clf(feat_fake)
-            loss_cls  = criterion_ce(logits, src_id)
-            opt_F.zero_grad(); opt_clf.zero_grad()
-            loss_cls.backward()
-            opt_F.step(); opt_clf.step()
-
-        os.makedirs(args.output_dir, exist_ok=True)
-        torch.save(G.state_dict(),      os.path.join(args.output_dir, f'G_style_epoch{epoch}.pth'))
-        torch.save(M.state_dict(),      os.path.join(args.output_dir, f'M_style_epoch{epoch}.pth'))
-        torch.save(SE.state_dict(),     os.path.join(args.output_dir, f'SE_style_epoch{epoch}.pth'))
-        torch.save(D.state_dict(),      os.path.join(args.output_dir, f'D_style_epoch{epoch}.pth'))
-        torch.save(F_ext.state_dict(),  os.path.join(args.output_dir, f'F_ext_style_epoch{epoch}.pth'))
-        torch.save(clf.state_dict(),    os.path.join(args.output_dir, f'clf_style_epoch{epoch}.pth'))
-        print(f"[Style] Epoch {epoch} | D: {loss_D:.4f} | G: {loss_G:.4f} | C: {loss_cls:.4f}")
+    return {'style': style_loader, 'adapt': adapt_loader}
 
 
-def train_adapt(models, optimizers, dataloaders, device, args):
-    G           = models['G']
-    M           = models['M']
-    F_ext, clf  = models['F_ext'], models['clf']
-    opt_F, opt_clf = optimizers['opt_F'], optimizers['opt_clf']
-    criterion_mmd = MKMMDLoss(layer_ids=args.mmd_layers)
+# -----------------------------------------------------------------
+def build_models(args, device):
+    G   = Generator(style_dim=args.style_dim).to(device)
+    M   = MappingNetwork(args.z_dim, args.style_dim,
+                         args.num_domains).to(device)
+    SE  = StyleEncoder(args.img_size, args.style_dim,
+                       args.num_domains, in_channels=1).to(device)
+    D   = Discriminator(in_channels=1,
+                        num_domains=args.num_domains,
+                        last_kernel=2).to(device)   # ← 4→2 kernel 변경!
 
-    for epoch in range(args.num_epochs_adapt):
-        for real_s, s_id, ds, real_t, dt in dataloaders['adapt']:
-            real_s, real_t = real_s.to(device), real_t.to(device)
-            s_id, ds, dt   = s_id.to(device), ds.to(device), dt.to(device)
-
-            z      = torch.randn(real_s.size(0), args.z_dim, device=device)
-            fake_t = G(real_s, M(z, dt))
-
-            feats_f, _ = clf(F_ext(fake_t))
-            feats_r, _ = clf(F_ext(real_t))
-            losses     = [criterion_mmd(f1, f2) for f1, f2 in zip(feats_f, feats_r)]
-            loss_mmd   = sum(losses) * args.lambda_mmd
-
-            opt_F.zero_grad(); opt_clf.zero_grad()
-            loss_mmd.backward()
-            opt_F.step(); opt_clf.step()
-
-        torch.save(F_ext.state_dict(), os.path.join(args.output_dir, f'F_ext_adapt_epoch{epoch}.pth'))
-        torch.save(clf.state_dict(),   os.path.join(args.output_dir, f'clf_adapt_epoch{epoch}.pth'))
-        print(f"[Adapt] Epoch {epoch} | MMD: {loss_mmd:.4f}")
+    F   = FeatureExtractor(in_channels=1).to(device)
+    clf = Classifier(in_dim=F.out_dim,
+                     hidden_dims=[512],
+                     num_classes=args.num_classes,
+                     return_features=True).to(device)   # logits & feats
+    return {'G': G, 'M': M, 'SE': SE, 'D': D, 'F_ext': F, 'clf': clf}
 
 
+# -----------------------------------------------------------------
+def build_optimizers(models, lr):
+    return {k: optim.Adam(v.parameters(), lr=lr)
+            for k, v in models.items() if k != 'SE'} | \
+           {'opt_SE': optim.Adam(models['SE'].parameters(), lr=lr)}
+
+
+# -----------------------------------------------------------------
+def style_stage(models, opt, loader, device, args):
+    G, M, SE, D, F_ext, clf = (models[k] for k in
+                               ('G', 'M', 'SE', 'D', 'F_ext', 'clf'))
+    mse, l1, ce = nn.MSELoss(), nn.L1Loss(), nn.CrossEntropyLoss()
+
+    for real_s, real_t, src_id, ds, dt in loader:
+        real_s, real_t = real_s.to(device), real_t.to(device)
+        src_id, ds, dt = src_id.to(device), ds.to(device), dt.to(device)
+
+        z = torch.randn(real_s.size(0), args.z_dim, device=device)
+        sc_t  = M(z, dt)
+        fake  = G(real_s, sc_t)
+
+        # Discriminator ------------------------------------------
+        D_real, D_fake = D(real_t, dt), D(fake.detach(), dt)
+        loss_D = 0.5 * (mse(D_real, torch.ones_like(D_real)) +
+                        mse(D_fake, torch.zeros_like(D_fake)))
+        opt['opt_D'].zero_grad(); loss_D.backward(); opt['opt_D'].step()
+
+        # Generator ---------------------------------------------
+        loss_G_gan = mse(D(fake, dt), torch.ones_like(D_fake))
+        loss_sty   = l1(SE(fake, dt), sc_t)
+
+        rec = G(fake, M(torch.randn_like(z), ds))
+        loss_cyc = l1(rec, real_s)
+
+        loss_G = loss_G_gan + loss_sty + loss_cyc
+        for k in ('opt_G', 'opt_M', 'opt_SE'):
+            opt[k].zero_grad()
+        loss_G.backward()
+        for k in ('opt_G', 'opt_M', 'opt_SE'):
+            opt[k].step()
+
+        # Classifier fine-tune ----------------------------------
+        feats = F_ext(fake.detach())
+        _, logits = clf(feats)
+        loss_cls = ce(logits, src_id)
+        opt['opt_F_ext'].zero_grad(); opt['opt_clf'].zero_grad()
+        loss_cls.backward()
+        opt['opt_F_ext'].step(); opt['opt_clf'].step()
+
+
+# -----------------------------------------------------------------
+def adapt_stage(models, opt, loader, device, args):
+    G, M, F_ext, clf = (models[k] for k in ('G', 'M', 'F_ext', 'clf'))
+    mmd = MKMMDLoss(layer_ids=args.mmd_layers)
+
+    for real_s, _, ds, real_t, dt in loader:
+        real_s, real_t = real_s.to(device), real_t.to(device)
+        ds, dt = ds.to(device), dt.to(device)
+
+        fake = G(real_s, M(torch.randn(real_s.size(0),
+                                       args.z_dim,
+                                       device=device), dt))
+
+        feats_f, _ = clf(F_ext(fake))
+        feats_r, _ = clf(F_ext(real_t))
+        loss = sum(mmd(a, b) for a, b in zip(feats_f, feats_r))
+        loss *= args.lambda_mmd
+
+        opt['opt_F_ext'].zero_grad(); opt['opt_clf'].zero_grad()
+        loss.backward()
+        opt['opt_F_ext'].step(); opt['opt_clf'].step()
+
+
+# -----------------------------------------------------------------
+def save_ckpt(models, save_dir, tag):
+    os.makedirs(save_dir, exist_ok=True)
+    for k, m in models.items():
+        torch.save(m.state_dict(), os.path.join(save_dir, f'{k}_{tag}.pth'))
+
+
+# -----------------------------------------------------------------
 def main():
     args   = parse_args()
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
-    transforms = default_transforms(args.img_size)
-    loaders = {
-        'style': DataLoader(
-            StyleDataset(args.data_root, args.domain_list, transform=transforms),
-            batch_size=args.batch_size, shuffle=True, drop_last=True
-        ),
-        'adapt': DataLoader(
-            AdaptDataset(
-                args.data_root,
-                source_domains=args.domain_list[:-1],
-                target_domains=[args.domain_list[-1]],
-                transform=transforms
-            ),
-            batch_size=args.batch_size, shuffle=True, drop_last=True
-        )
-    }
+    loaders = make_dataloaders(args)
+    models  = build_models(args, device)
+    optims  = build_optimizers(models, args.lr)
 
-    models = {
-        'G':     Generator(style_dim=args.style_dim).to(device),
-        'M':     MappingNetwork(latent_dim=args.z_dim, style_dim=args.style_dim,
-                               num_domains=args.num_domains).to(device),
-        'SE':    StyleEncoder(img_size=args.img_size, in_channels=1,
-                              style_dim=args.style_dim, num_domains=args.num_domains).to(device),
-        'D':     Discriminator(in_channels=1, num_domains=args.num_domains).to(device),
-        'F_ext': FeatureExtractor(in_channels=1).to(device),
-        'clf':   Classifier(in_dim=FeatureExtractor(in_channels=1).out_dim,
-                            hidden_dims=[512], num_classes=args.num_classes).to(device)
-    }
+    # -----------------------------------------------------------
+    for ep in range(args.epochs):
+        models['G'].train(); models['clf'].train()
 
-    optimizers = {
-        'opt_G':   optim.Adam(models['G'].parameters(),       lr=args.lr),
-        'opt_M':   optim.Adam(models['M'].parameters(),       lr=args.lr),
-        'opt_SE':  optim.Adam(models['SE'].parameters(),      lr=args.lr),
-        'opt_D':   optim.Adam(models['D'].parameters(),       lr=args.lr),
-        'opt_F':   optim.Adam(models['F_ext'].parameters(),   lr=args.lr),
-        'opt_clf': optim.Adam(models['clf'].parameters(),     lr=args.lr),
-    }
+        style_stage(models, optims, loaders['style'], device, args)
+        adapt_stage(models, optims, loaders['adapt'], device, args)
 
-    train_style(models, optimizers, loaders, device, args)
-    train_adapt(models, optimizers, loaders, device, args)
+        if (ep + 1) % 5 == 0:
+            save_ckpt(models, args.save_dir, f'ep{ep+1}')
+            print(f"[epoch {ep+1:03d}] checkpoint saved")
 
-if __name__ == '__main__':
+    print("✅  Training finished")
+
+
+if __name__ == "__main__":
     main()

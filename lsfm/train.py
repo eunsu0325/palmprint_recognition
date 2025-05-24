@@ -199,7 +199,7 @@ def main():
         'M':     MappingNetwork(latent_dim=args.z_dim, style_dim=args.style_dim,
                                num_domains=args.num_domains).to(device),
         'SE':    StyleEncoder(img_size=args.img_size, in_channels=1,
-                             (style_dim=args.style_dim, num_domains=args.num_domains).to(device),
+                              style_dim=args.style_dim, num_domains=args.num_domains).to(device),
         'D':     Discriminator(in_channels=1, num_domains=args.num_domains).to(device),
         'F_ext': FeatureExtractor(in_channels=1).to(device),
         'clf':   Classifier(in_dim=FeatureExtractor(in_channels=1).out_dim,
